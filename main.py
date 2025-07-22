@@ -1,6 +1,23 @@
 import requests
 import curses
 import time
+import datetime
+
+from typing import Any, NoReturn, List, Dict
+
+def knots_to_mph(knots):
+  """
+  Converts a speed from knots to miles per hour (mph).
+
+  Args:
+    knots: The speed in knots (float or int).
+
+  Returns:
+    The speed in miles per hour (float).
+  """
+  conversion_factor = 1.15078
+  mph = knots * conversion_factor
+  return int(mph)
 
 def get_service_data():
 	return requests.get("https://www.aainflight.com/api/v1/connectivity/viasat/services").json()
@@ -8,61 +25,122 @@ def get_service_data():
 def get_flight_data():
 	return requests.get("https://www.aainflight.com/api/v1/connectivity/viasat/flight").json()
 
-def format_data():
-	formatted_data = []
-	service_data = get_service_data()
-	flight_data = get_flight_data()
+def format_data() -> List[str]:
+	"""
+	Formats flight and service data into a list of formatted strings.
+
+	Returns:
+		List[str]: Formatted strings containing flight and service information
+	"""
+	formatted_data: List[str] = []
+	service_data: Dict[str, Any] = get_service_data()
+	flight_data: Dict[str, Any] = get_flight_data()
+
+    # Format WiFi service information
 	for service in service_data['serviceList']:
 		if service['serviceName'] != 'satelliteNetwork':
 			continue
+		
 		details = service['details']
-		formatted_data.append("WiFi Status: {}".format(details['serviceState']))
-		formatted_data.append("Frequency Band: {}".format(details['frequencyBand']))
+		formatted_data.extend([
+			f"WiFi Status:        {details['serviceState']}",
+			f"Frequency Band:     {details['frequencyBand']}"
+		])
 		
 		if details['returnToCoverageTime'] != 0:
-			formatted_data.append("ETA for WiFi coverage resume: {}".format(details['returnToCoverageTime']))
+			formatted_data.append(
+				f"WiFi Resume ETA:      {details['returnToCoverageTime']}"
+			)
 
-	formatted_data.append("Plane Registration: {}".format(flight_data['vehicleId']))
-	formatted_data.append("Flight Number: {}".format(flight_data['flightNumber']))
-	formatted_data.append("Origin: {}".format(flight_data['origin']))
-	formatted_data.append("Destination: {}".format(flight_data['destination']))
-	formatted_data.append("Total time: {}".format(flight_data['flightDuration']))
+    # Format basic flight information
+	formatted_data.extend([
+		f"Plane Registration: {flight_data['vehicleId']}",
+		f"Flight Number:      {flight_data['flightNumber']}",
+		f"Origin:             {flight_data['origin']}",
+		f"Destination:        {flight_data['destination']}"
+	])
 
-	time_flown = flight_data['flightDuration'] - flight_data['timeToGo']
-	formatted_data.append("Time Flown: {}".format(time_flown))
-	formatted_data.append("Time Remaining: {}".format(flight_data['timeToGo']))
+	def format_minutes_to_time(minutes: int) -> str:
+		"""Convert minutes to HH:MM format."""
+		return datetime.time(
+			hour=int(minutes / 60),
+			minute=int(minutes % 60)
+		).strftime("%H:%M")
 
-	formatted_data.append("\n")
-	formatted_data.append("Flight Phase: {}".format(flight_data['flightPhase']))
-	formatted_data.append("Current Altitude: {}".format(flight_data['altitude']))
-	formatted_data.append("Current Groundspeed: {}".format(flight_data['groundspeed']))
-	formatted_data.append("Remaining Miles: {}".format(flight_data['distanceToGo']))
+	flight_duration_str = format_minutes_to_time(flight_data['flightDuration'])
+	time_flown_str = format_minutes_to_time(
+		flight_data['flightDuration'] - flight_data['timeToGo']
+	)
+	time_remaining_str = format_minutes_to_time(flight_data['timeToGo'])
+
+	# Format flight status information
+	formatted_data.extend([
+		f"\n",
+		f"Flight Phase:        {flight_data['flightPhase']}",
+		f"Current Altitude:    {flight_data['altitude']}",
+	])
+
+	# Format speed information
+	groundspeed_knots: float = flight_data['groundspeed']
+	groundspeed_mph: float = knots_to_mph(groundspeed_knots)
+	formatted_data.extend([
+		f"Groundspeed (knots): {groundspeed_knots}",
+		f"Groundspeed (MPH):   {groundspeed_mph}"
+		f"\n"
+	])
+
+	formatted_data.extend([
+		f"Total time:          {flight_duration_str}",
+		f"Time Flown:          {time_flown_str}",
+		f"Time Remaining:      {time_remaining_str}",
+		"\n"
+	])
+
 	return formatted_data
 
+def main(stdscr: Any) -> NoReturn:
+	"""
+	Main application loop for the curses-based interface.
 
+	Args:
+		stdscr: The main curses window object
+	"""
+	# Initialize curses settings
+	curses.curs_set(0)  # Hide the cursor
+	curses.init_pair(1, curses.COLOR_BLUE, curses.COLOR_GREEN)
+	stdscr.clear()      # Clear the screen initially
+	rows, cols = stdscr.getmaxyx()
 
-
-def main(stdscr):
-    # # Initialize curses settings
-	curses.curs_set(0) # Hide the cursor
-	stdscr.clear()     # Clear the screen initially
+	# Calculate the y-coordinate for the last line (0-indexed)
+	last_line_y = rows - 1
 	stdscr.nodelay(True)  # Make getch() non-blocking
 
-	counter = 0
-	while True:
-		formatted_data = "\n".join(format_data())
-		stdscr.addstr(0, 0, formatted_data)
-		# stdscr.addstr(0, 0, f"Screen updated {counter} times.")
-		stdscr.addstr(20, 0, "Press 'q' to quit.")
-		stdscr.refresh()
+	try:
+		while True:
+			refresh_timestamp: datetime = datetime.datetime.now()
+			refresh_timestamp_str: str = refresh_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+			
+			# Format and display data
+			formatted_data: str = "\n".join(format_data())
+			stdscr.addstr(0, 0, formatted_data)
+			stdscr.addstr(last_line_y-2, 0, f"Last reloaded: {refresh_timestamp_str}", curses.color_pair(1))
+			stdscr.addstr(last_line_y, 0, "Press 'q' to quit.")
+			stdscr.refresh()
 
-		key = stdscr.getch()
-		if key == ord('q'):
-			break
+			# Check for quit command
+			if stdscr.getch() == ord('q'):
+				break
 
-		time.sleep(15)  # Wait for 15 seconds
-		stdscr.clear()  # Clear the entire screen
-		counter += 1
+			# Wait and refresh
+			time.sleep(5)  # 5 second delay
+			stdscr.clear()
+            
+	except KeyboardInterrupt:
+		# Handle clean exit on Ctrl+C
+		pass
+	finally:
+		# Cleanup curses
+		curses.endwin()
 
 if __name__ == '__main__':
 	curses.wrapper(main)
